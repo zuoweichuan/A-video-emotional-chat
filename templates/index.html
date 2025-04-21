@@ -1,0 +1,222 @@
+<style>
+    .message-box
+    {
+        overflow-y: auto;        /* 垂直滚动条 */
+        border: 1px solid #ccc;  /* 边框 */
+        padding: 10px;           /* 内边距 */
+        background: #f9f9f9;      /* 背景色 */
+        word-wrap: break-word;   /* 长单词或URL自动换行 */
+        white-space: pre-wrap;   /* 保留换行符，但允许自动换行 */
+        width: 800px;
+        height: 600px;
+    }
+    .message-received
+    {
+        margin: 2px 0;
+        padding: 8px;
+        background: white;
+        border-radius: 4px;
+        box-shadow: 0 1px 3px rgba(0,0,0,0.1);
+    }
+</style>
+
+<!DOCTYPE html>
+<html>
+<head>
+    <title>Welcome to Mini Video ChatRoom</title>
+<!--    <link rel="stylesheet" href="/static/style.css">-->
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/socket.io/4.0.1/socket.io.js"></script>
+    <script src="https://code.jquery.com/jquery-3.6.0.min.js"></script>
+</head>
+
+<body>
+    <img src="{{ url_for('video_feed') }}" height="500" style="position: absolute; top: 100px; left: 1000px;">
+    <button id="cartoon-btn">切换卡通模式</button>
+
+
+    <div class="container">
+        <h1>WebSocket Chat</h1>
+        <div class="connection-panel">
+            <h3>Your Connection ID: <span id="my-sid"></span></h3>
+            <div>
+                <input type="text" id="target-sid" placeholder="Enter target connection ID">
+                <button id="connect-btn"> Request Connection  </button>
+            </div>
+
+            <div id="connection-request" style="display: none;">
+                <p>Connection request from: <span id="requester-sid"></span></p>
+                <p id="request-message"></p>
+                <button id="accept-btn">Accept</button>
+                <button id="reject-btn">Reject</button>
+            </div>
+        </div>
+
+
+        <div class="chat-panel" style="display: none;">
+            <h3>Chat with: <span id="partner-sid"></span></h3>
+<!--            <div id="chat-messages"></div>-->
+            <div id="chat-messages" class="message-box"></div>
+            <div class="message-input">
+                <input type="text" id="message-input" placeholder="Type your message">
+            </div>
+            <div>
+                <button id="send-btn" disabled>Send</button>
+                <button id="disconnect-btn">Disconnect</button>
+            </div>
+        </div>
+    </div>
+
+
+
+    <script>
+        const socket = io();
+        let mySid = '';
+        let currentRoom = '';
+        let partnerSid = '';
+        const cartoonBtn = document.getElementById('cartoon-btn');
+
+        cartoonBtn.addEventListener('click', () => {
+            socket.emit('toggle_cartoon_mode', {});
+        });
+        // 当连接建立时获取自己的socket ID
+
+        socket.on('connect', () =>
+        {
+            mySid = socket.id;
+            $('#my-sid').text(mySid);
+        });
+
+        // 请求连接
+        $('#connect-btn').click(() =>
+        {
+            const targetSid = $('#target-sid').val().trim();
+            if (targetSid && targetSid !== mySid)
+            {
+                socket.emit('request_connection', {target_sid: targetSid, message: 'Hello, I want to chat with you!'});
+                alert('Connection request sent!');
+            }
+            else
+            {
+                alert('Invalid target ID');
+            }
+        });
+
+        // 收到连接请求
+        socket.on('connection_request', (data) =>
+        {
+            $('#requester-sid').text(data.requester_sid);
+            $('#request-message').text(data.message);
+            $('#connection-request').show();
+        });
+
+        // 接受连接
+        $('#accept-btn').click(() =>
+        {
+            const requesterSid = $('#requester-sid').text();
+            socket.emit('accept_connection', {requester_sid: requesterSid});
+            $('#connection-request').hide();
+        });
+
+        // 拒绝连接
+        $('#reject-btn').click(() =>
+        {
+            const requesterSid = $('#requester-sid').text();
+            socket.emit('reject_connection', {requester_sid: requesterSid, message: 'Sorry, I cannot chat right now.'});
+            $('#connection-request').hide();
+        });
+
+        // 连接被拒绝
+        socket.on('connection_rejected', (data) =>
+        {
+            alert('Connection rejected: ' + data.message);
+        });
+
+        // 连接建立成功
+        socket.on('connection_established', (data) =>
+        {
+            currentRoom = data.room_id;
+            partnerSid = data.partner_sid;
+            $('#partner-sid').text(partnerSid);
+            $('.chat-panel').show();
+            $('.connection-panel').hide();
+        });
+
+        // 收到消息
+        socket.on('new_message', (data) => {
+            const messageClass = data.sender_sid === mySid ? 'sent' : 'received';
+            $('#chat-messages').append
+            (`
+                <div class="message-${messageClass}">
+                    Partner: <br>${data.message} <br>
+                    <span style="color: ${data.sentiment === 'joy' ? 'yellow' : data.sentiment === 'sadness' ? 'blue' : data.sentiment === 'anger' ? 'red' : data.sentiment === 'fear' ? 'purple' : data.sentiment === 'surprise' ? 'orange' : data.sentiment === 'disgust' ? 'brown' : 'gray'};">
+                        (${data.sentiment} - Score: ${data.score.toFixed(2)})
+                    </span>
+                </div>
+            `);
+        });
+
+        const messageInput = $('#message-input');
+        const sendBtn = $('#send-btn');
+
+        messageInput.on('input', () =>
+        {
+            const inputValue = messageInput.val().trim(); // 去除前后空格
+            const isEmptyOrSpacesOnly = inputValue === '' || /[\x00-\x1F\x7F]+/g.test(inputValue); // 检查是否为空或包含ASCII控制字符
+
+            // 根据输入框内容启用或禁用发送按钮
+            sendBtn.prop('disabled', isEmptyOrSpacesOnly);
+        });
+
+        // 发送消息
+        $('#send-btn').click(() =>
+        {
+            $('#send-btn').prop('disabled', true);
+            const message = $('#message-input').val().trim();
+            if (message && currentRoom)
+            {
+                socket.emit('send_message', {room_id: currentRoom, message: message});
+                $('#message-input').val('');
+            }
+
+            $('#chat-messages').append
+            (`
+                <div class="message-received">
+Me: <br>${message}
+                </div>
+
+            `);
+        });
+
+        $('#disconnect-btn').click(() =>
+        {
+            alert("您已请求断开连接，聊天即将结束！");
+            socket.emit('disconnect_chat', { room_id: currentRoom, sender_sid: socket.id});
+            $('.chat-panel').hide();
+            $('.connection-panel').show();
+            currentRoom = ''; // 重置当前房间
+            partnerSid = ''; // 重置伙伴SID
+            $('#partner-sid').text(''); // 清空伙伴SID显示
+        });
+
+        socket.on('chat_disconnected', (data) =>
+        {
+            alert(data.message)
+            if (currentRoom === data.room_id)
+            {
+                $('.chat-panel').hide();
+                $('.connection-panel').show();
+                currentRoom = ''; // 重置当前房间
+                partnerSid = ''; // 重置伙伴SID
+                $('#partner-sid').text(''); // 清空伙伴SID显示
+                }
+        });
+
+
+
+
+    </script>
+</body>
+</html>
+
+
+
